@@ -1,66 +1,88 @@
-from rest_framework import serializers, exceptions
-from event import models
-from event import validators
-from user.serializers import UserSerializer
+from datetime import datetime, timezone
+
+from rest_framework import serializers
+
+from event import models, validators
+
+
+class TimestampField(serializers.DateTimeField):
+    """Accepts Unix seconds as the frontend sends them, or an ISO date; returns ISO dates."""
+
+    def to_internal_value(self, value):
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.replace('.', '', 1).isdigit()):
+            try:
+                return datetime.fromtimestamp(float(value), tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                self.fail('invalid', format='Unix seconds')
+        return super().to_internal_value(value)
 
 
 class EventSerializer(serializers.ModelSerializer):
-    active = serializers.BooleanField(initial=True, default=True)
+    """An event as everybody sees it. The list of registered guests is private."""
+
+    user = serializers.CharField(source='user.username', read_only=True)
+    likes = serializers.SerializerMethodField()
 
     class Meta:
         model = models.Event
-        fields = '__all__'
-        validators = [validators.TagsValidator(), validators.CityValidator()]
+        fields = ('id', 'user', 'name', 'image', 'start_date', 'end_date', 'description', 'tags', 'city',
+                  'created_at', 'watched', 'liked', 'likes')
+        read_only_fields = fields
+
+    def get_likes(self, event) -> int:
+        return len(event.liked)
 
 
-class UserEventsSerializer(serializers.ModelSerializer):
-    user = UserSerializer()
+class CreateEventSerializer(serializers.ModelSerializer):
+    start_date = TimestampField(required=False, allow_null=True)
+    end_date = TimestampField(required=False, allow_null=True)
+    tags = serializers.JSONField(validators=[validators.validate_tags])
+    city = serializers.CharField(validators=[validators.validate_city])
+    description = serializers.JSONField(required=False, validators=[validators.validate_description])
 
     class Meta:
         model = models.Event
-        exclude = ('description', )
+        fields = ('id', 'name', 'image', 'start_date', 'end_date', 'description', 'tags', 'city')
+        read_only_fields = ('id',)
+
+    def validate(self, attrs):
+        start, end = attrs.get('start_date'), attrs.get('end_date')
+        if start and end and end < start:
+            raise serializers.ValidationError({'end_date': 'The event cannot end before it starts.'})
+        return attrs
+
+
+class OwnerEventSerializer(serializers.ModelSerializer):
+    """An event in the cabinet of its organizer, with the registered guests."""
+
+    class Meta:
+        model = models.Event
+        fields = ('id', 'name', 'image', 'start_date', 'end_date', 'tags', 'city', 'created_at', 'watched',
+                  'liked', 'registered', 'active')
+        read_only_fields = fields
 
 
 class ImageSerializer(serializers.ModelSerializer):
+    image = serializers.ImageField()
+
     class Meta:
         model = models.Image
-        fields = '__all__'
-
-
-class DeleteEventSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = models.Event
-        fields = ('id', )
-
-    def update(self, instance, validated_data):
-        instance.active = False
-        instance.save()
-        return instance
-
-
-class LikeEventSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = models.Event
-        fields = ('liked', )
-
-    def update(self, instance, validated_data):
-        username = self.context['request'].user.username
-        if username in instance.liked or instance.user.username == username:
-            raise exceptions.PermissionDenied("You cannot like this event.")
-        instance.liked.append(username)
-        instance.save()
-        return instance
+        fields = ('image',)
 
 
 class RegisterEventSerializer(serializers.Serializer):
-    name = serializers.CharField()
+    name = serializers.CharField(max_length=100)
     email = serializers.EmailField()
-    contacts = serializers.CharField()
+    contacts = serializers.CharField(max_length=200)
 
-    class Meta:
-        fields = '__all__'
+    def validate_email(self, email):
+        event = self.context['event']
+        if any(guest.get('email', '').lower() == email.lower() for guest in event.registered):
+            raise serializers.ValidationError('This email is already registered for the event.')
+        return email
 
-    def create(self, instance):
-        instance.registered.append(self.validated_data)
-        instance.save()
-        return instance
+    def save(self):
+        event = self.context['event']
+        event.registered.append(dict(self.validated_data))
+        event.save(update_fields=['registered'])
+        return event

@@ -14,8 +14,10 @@ import CheckList from "@editorjs/checklist";
 import Delimiter from "@editorjs/delimiter";
 import InlineCode from "@editorjs/inline-code";
 import SimpleImage from "@editorjs/simple-image";
+import { API_URL } from "src/services/settings";
 
-export default (id?: string) => {
+// Images are uploaded to the backend with the token of the user
+export default (token?: string | null) => {
     const tools = {
         embed: Embed,
         table: Table,
@@ -29,9 +31,9 @@ export default (id?: string) => {
             class: Image,
             config: {
                 endpoints: {
-                    byFile: `http://localhost:8000/api/v1/event/image?user_id=${id}`,
-                    byUrl: "http://localhost:8000/media/",
+                    byFile: `${API_URL}event/image`,
                 },
+                additionalRequestHeaders: { Authorization: `Token ${token}` },
             },
         },
         header: Header,
@@ -42,6 +44,6 @@ export default (id?: string) => {
         inlineCode: InlineCode,
         simpleImage: SimpleImage,
     };
-    if (id === null) return { ...tools, ...{ image: Image } };
+    if (!token) return { ...tools, image: Image }; // reading: the tool only shows saved images
     return tools;
 };

@@ -1,6 +1,7 @@
 import React from "react";
 import classes from "./DateNote.module.scss";
 import DateIcon from "@mui/icons-material/DateRange";
+import { parseDate } from "src/utils/dates";
 
 type DateNoteProps = {
     startDate: string | null;
@@ -23,9 +24,8 @@ const months = [
 ];
 
 const DateNote: React.FC<DateNoteProps> = (props) => {
-    const startDate =
-        props.startDate !== null ? new Date(props.startDate) : null;
-    const endDate = props.endDate !== null ? new Date(props.endDate) : null;
+    const startDate = parseDate(props.startDate);
+    const endDate = parseDate(props.endDate);
 
     return (
         <div className={classes["container"]}>

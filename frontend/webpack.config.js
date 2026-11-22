@@ -1,6 +1,7 @@
 const HtmlWebpackPlugin = require("html-webpack-plugin");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
 const path = require("path");
+const webpack = require("webpack");
 
 module.exports = function (env) {
     const mode = env.mode;
@@ -8,7 +9,7 @@ module.exports = function (env) {
     return {
         mode: mode,
         entry: "./src/index.tsx",
-        devtool: "inline-source-map",
+        devtool: isProduction ? false : "inline-source-map",
         resolve: {
             extensions: ["*", ".ts", ".tsx", ".js", ".jsx"],
             alias: {
@@ -36,6 +37,9 @@ module.exports = function (env) {
             static: true,
         },
         plugins: [
+            new webpack.DefinePlugin({
+                "process.env.API_URL": JSON.stringify(process.env.API_URL || ""),
+            }),
             new HtmlWebpackPlugin({
                 template: "public/index.html",
                 filename: "index.html",

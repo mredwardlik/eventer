@@ -55,6 +55,9 @@ export const register =
     };
 
 export const logout = () => (dispatch: RootDispatch) => {
+    if (localStorage.getItem("token") !== null) {
+        userService.logout().catch(() => {}); // the token may already be invalid
+    }
     localStorage.removeItem("token");
     dispatch(logoutUserAC());
 };
@@ -68,7 +71,7 @@ export const restoreUser = () => (dispatch: RootDispatch) => {
                 authenticated: true,
             })
         );
-        userService.identify(token).then(
+        userService.me().then(
             (response) => {
                 dispatch(
                     setUserStateAC({
@@ -81,7 +84,11 @@ export const restoreUser = () => (dispatch: RootDispatch) => {
                 );
             },
             (error) => {
-                dispatch(logout());
+                // only a rejected token logs out; a server that is down does not
+                if (error?.response?.status === 401) {
+                    localStorage.removeItem("token");
+                    dispatch(logoutUserAC());
+                }
             }
         );
     }

@@ -14,6 +14,7 @@ type WysiwygEditorProps = {
 
 const WysiwygEditor: React.FC<any> = (props) => {
     const id = useRootSelector((state) => state.user.id);
+    const token = useRootSelector((state) => state.user.token);
     const handleInitialize = (instance) => {
         if (props.editor !== null) props.editor.current = instance;
     };
@@ -28,7 +29,7 @@ const WysiwygEditor: React.FC<any> = (props) => {
                 }}
             >
                 <ReactEditorJS
-                    tools={tools(id)}
+                    tools={tools(token)}
                     defaultValue={props.value}
                     onInitialize={handleInitialize}
                 />

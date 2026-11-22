@@ -1,97 +1,77 @@
-import uuid
-from rest_framework import serializers
-from rest_framework.validators import UniqueValidator
-from django.contrib.auth.password_validation import validate_password
-from user import models
 from django.contrib.auth import authenticate
-from rest_framework.authtoken.models import Token
 from django.contrib.auth.models import update_last_login
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework import serializers
+from rest_framework.authtoken.models import Token
+from rest_framework.validators import UniqueValidator
+
+from user import models
 
 
-class UserSerializer(serializers.ModelSerializer):
+class ProfileSerializer(serializers.ModelSerializer):
+    """What the user may see about their own account: no password hash, no permissions."""
+
     class Meta:
         model = models.User
-        fields = '__all__'
-
-
-class IdentifyUserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = models.User
-        exclude = ('password', 'date_joined',
-                   'groups', 'is_active', 'user_permissions', 'is_superuser', 'is_staff')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'last_login')
+        read_only_fields = fields
 
 
 class RegisterUserSerializer(serializers.ModelSerializer):
     username = serializers.CharField(
-        required=True,
-        validators=[UniqueValidator(queryset=models.User.objects.all())],
+        max_length=150,
+        validators=[UniqueValidator(queryset=models.User.objects.all(), message='This username is taken.')],
     )
-    email = serializers.EmailField(
-        required=True,
-
-    )
-    password = serializers.CharField(
-        write_only=True,
-        required=True,
-        validators=[validate_password]
-    )
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, style={'input_type': 'password'})
 
     class Meta:
         model = models.User
-        fields = ('username', 'email', 'password', )
+        fields = ('username', 'email', 'password')
+
+    def validate(self, attrs):
+        # the validators compare the password with the username and the email too
+        try:
+            validate_password(attrs['password'], models.User(username=attrs['username'], email=attrs['email']))
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({'password': list(error.messages)}) from None
+        return attrs
 
     def create(self, validated_data):
-        user = models.User.objects.create(
-            username=validated_data['username'],
-            email=validated_data['email'],
-        )
+        user = models.User(username=validated_data['username'], email=validated_data['email'])
         user.set_password(validated_data['password'])
         user.save()
         models.EditorSetting.objects.create(user=user)
         return user
 
 
-class LoginUserSerializer(serializers.ModelSerializer):
-    username = serializers.CharField(
-        required=True,
-    )
-    password = serializers.CharField(
-        write_only=True,
-        required=True,
-    )
+class LoginUserSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True, style={'input_type': 'password'})
+
+    def validate(self, attrs):
+        user = authenticate(username=attrs['username'], password=attrs['password'])
+        if user is None:
+            raise serializers.ValidationError('A user with this username and password was not found.')
+        attrs['user'] = user
+        return attrs
 
     def create(self, validated_data):
-        user = validated_data.get('user', None)
-        if Token.objects.filter(user=user).exists():
-            token = Token.objects.get(user=user)
-        else:
-            token = Token.objects.create(user=user)
+        user = validated_data['user']
+        token, _ = Token.objects.get_or_create(user=user)
         update_last_login(None, user)
         return token
 
-    def validate(self, attrs):
-        username = attrs.get('username', None)
-        password = attrs.get('password', None)
-        user = authenticate(username=username, password=password)
-        if user is None:
-            raise serializers.ValidationError(
-                'A user with this username and password was not found.'
-            )
-        attrs['user'] = user
-        return super().validate(attrs)
 
-    class Meta:
-        model = models.User
-        fields = ('username', 'password', )
+class EditorSettingSerializer(serializers.ModelSerializer):
+    value = serializers.JSONField()
 
-
-class GetEditorSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.EditorSetting
-        fields = '__all__'
+        fields = ('value',)
 
-
-class ChangeEditorSettingSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = models.EditorSetting
-        fields = ('value', )
+    def validate_value(self, value):
+        if not isinstance(value, dict) or not isinstance(value.get('blocks', []), list):
+            raise serializers.ValidationError('Expected an Editor.js document: {"blocks": [...]}.')
+        return value

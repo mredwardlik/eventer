@@ -10,6 +10,11 @@ def get_upload_path(instance, filename):
     return '{0}/{1}{2}'.format(instance.user.id, uuid.uuid4(), extension)
 
 
+def empty_document():
+    """An empty Editor.js document."""
+    return {'blocks': []}
+
+
 class Event(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
@@ -20,7 +25,7 @@ class Event(models.Model):
     image = models.ImageField(upload_to=get_upload_path, blank=True, null=True)
     start_date = models.DateTimeField(null=True)
     end_date = models.DateTimeField(null=True)
-    description = models.JSONField(default=list)
+    description = models.JSONField(default=empty_document)
     tags = models.JSONField()
     created_at = models.DateTimeField(default=timezone.now)
     city = models.CharField(max_length=50)

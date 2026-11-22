@@ -21,6 +21,12 @@ import { eventService } from "src/services/event";
 import { useNavigate } from "react-router-dom";
 import { DeleteEventSwal } from "src/swal/event";
 import classes from "./EventsTable.module.scss";
+import { formatDay, formatTime, parseDate } from "src/utils/dates";
+
+const formatDate = (value: string | null) => {
+    const date = parseDate(value);
+    return date ? `${formatDay(date)}, ${formatTime(date)}` : "—";
+};
 
 function createColumn(name: string, align: TableCellProps["align"] = "left") {
     return { name, align };
@@ -105,7 +111,7 @@ const EventsTable: React.FC<{}> = () => {
                                     </Button>
                                 </TableCell>
                                 <TableCell align="center">
-                                    {event.start_date}
+                                    {formatDate(event.start_date)}
                                 </TableCell>
                                 <TableCell align="center">
                                     {event.registered.length}

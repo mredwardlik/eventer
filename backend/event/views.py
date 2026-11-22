@@ -1,119 +1,117 @@
-import datetime
 from uuid import UUID
-from rest_framework.views import APIView
+
+from django.db import transaction
+from django.db.models import F
+from rest_framework import exceptions, status
+from rest_framework.generics import CreateAPIView, ListAPIView, get_object_or_404
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.generics import CreateAPIView, ListAPIView, UpdateAPIView, get_object_or_404
-from event import models
-from event import serializers
-from rest_framework.parsers import MultiPartParser, FormParser
-from rest_framework.permissions import IsAuthenticated
-from rest_framework import exceptions
+from rest_framework.views import APIView
+
 from core import constant
+from event import models, serializers
+
+
+def get_event(event_id, **filters) -> models.Event:
+    try:
+        UUID(str(event_id))
+    except ValueError:
+        raise exceptions.NotFound() from None
+    return get_object_or_404(models.Event.objects.select_related('user'), id=event_id, **filters)
 
 
 class CreateEventView(CreateAPIView):
-    serializer_class = serializers.EventSerializer
-    parser_classes = (MultiPartParser, FormParser, )
+    permission_classes = (IsAuthenticated,)
+    serializer_class = serializers.CreateEventSerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
-    def prepare_data(self, request):
-        request.data._mutable = True
-        start_date = request.data.get('start_date', None)
-        end_date = request.data.get('end_date', None)
-        if (start_date is not None):
-            request.data['start_date'] = datetime.datetime.fromtimestamp(
-                int(start_date))
-        if (end_date is not None):
-            request.data['end_date'] = datetime.datetime.fromtimestamp(
-                int(end_date))
-        request.data['user'] = request.user
-        request.data._mutable = False
-        return request
-
-    def create(self, request: Request, *args, **kwargs):
-        request = self.prepare_data(request)
-        return super().create(request, *args, **kwargs)
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
 
 class GetUserEventsView(ListAPIView):
-    permission_classes = (IsAuthenticated, )
-    serializer_class = serializers.UserEventsSerializer
-    queryset = models.Event.objects.filter(active=True)
+    permission_classes = (IsAuthenticated,)
+    serializer_class = serializers.OwnerEventSerializer
 
     def get_queryset(self):
-        return super().get_queryset().filter(user=self.request.user)
-
-
-class GetEventView(APIView):
-    def get(self, request: Request, *args, **kwargs):
-        if 'id' not in request.query_params:
-            raise exceptions.NotFound()
-        try:
-            event = models.Event.objects.get(
-                id=UUID(request.query_params['id']))
-            serializer = serializers.EventSerializer(
-                instance=event, context={"request": request})
-            if serializer.data['active'] is False:
-                raise exceptions.NotFound()
-        except Exception:
-            raise exceptions.NotFound()
-        event.watched += 1
-        event.save()
-        return Response(serializer.data)
+        return models.Event.objects.filter(active=True, user=self.request.user).order_by('-created_at')
 
 
 class GetEventsView(ListAPIView):
-    authentication_classes = ()
     serializer_class = serializers.EventSerializer
-    queryset = models.Event.objects.filter(active=True)
+
+    def get_queryset(self):
+        return models.Event.objects.filter(active=True).select_related('user').order_by('start_date')
+
+
+class GetEventView(APIView):
+    """One event. Every request counts as a view."""
+
+    def get(self, request: Request):
+        event = get_event(request.query_params.get('id'), active=True)
+        models.Event.objects.filter(pk=event.pk).update(watched=F('watched') + 1)
+        event.refresh_from_db(fields=['watched'])
+        return Response(serializers.EventSerializer(event, context={'request': request}).data)
 
 
 class LoadImageView(CreateAPIView):
-    parser_classes = (MultiPartParser, FormParser, )
+    """Image upload for Editor.js; answers in the format the image tool expects."""
+
+    permission_classes = (IsAuthenticated,)
+    parser_classes = (MultiPartParser, FormParser)
     serializer_class = serializers.ImageSerializer
 
     def create(self, request: Request, *args, **kwargs):
-        request.data['user'] = request.query_params.get('user_id', None)
-        response = super().create(request, *args, **kwargs)
-        response.data = {'success': 1, 'file': {'url': response.data['image']}}
-        return response
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({'success': 0, 'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+        serializer.save(user=request.user)
+        return Response({'success': 1, 'file': {'url': serializer.data['image']}}, status=status.HTTP_201_CREATED)
 
 
 class DeleteEventView(APIView):
-    permission_classes = (IsAuthenticated, )
-    serializer_class = serializers.DeleteEventSerializer
+    """Hide an event of the current user. It stays in the database."""
 
-    def delete(self, request: Request, *args, **kwargs):
-        event_id = kwargs.get('id', None)
-        instance = get_object_or_404(
-            models.Event.objects.all(), id=event_id, user=request.user)
-        serializer = serializers.DeleteEventSerializer(instance, request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)
+    permission_classes = (IsAuthenticated,)
+
+    def delete(self, request: Request, id):
+        event = get_event(id, user=request.user, active=True)
+        event.active = False
+        event.save(update_fields=['active'])
+        return Response({'id': str(event.id)})
 
 
-class LikeEventView(UpdateAPIView):
-    permission_classes = (IsAuthenticated, )
-    serializer_class = serializers.LikeEventSerializer
-    queryset = models.Event.objects.all()
-    lookup_field = 'id'
+class LikeEventView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def patch(self, request: Request, id):
+        with transaction.atomic():
+            event = get_event(id, active=True)
+            username = request.user.username
+            if event.user_id == username or username in event.liked:
+                raise exceptions.PermissionDenied('You cannot like this event.')
+            event.liked.append(username)
+            event.save(update_fields=['liked'])
+        return Response({'liked': event.liked, 'likes': len(event.liked)})
 
 
 class RegisterEventView(APIView):
-    def patch(self, request: Request, *args, **kwargs):
-        instance = get_object_or_404(
-            models.Event.objects.all(), id=kwargs.get('id', None))
-        serializer = serializers.RegisterEventSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.create(instance)
+    """Sign up for an event: name, email and contacts. No account is needed."""
+
+    def patch(self, request: Request, id):
+        with transaction.atomic():
+            event = get_event(id, active=True)
+            serializer = serializers.RegisterEventSerializer(data=request.data, context={'event': event})
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(serializer.data)
 
 
 class GetSpecialInfoView(APIView):
-    def get(self, request: Request, *args, **kwargs):
-        if kwargs['key'] == 'cities':
-            return Response(constant.CITIES)
-        if kwargs['key'] == 'tags':
-            return Response(constant.TAGS)
-        raise exceptions.NotFound()
+    def get(self, request: Request, key):
+        lists = {'cities': constant.CITIES, 'tags': constant.TAGS}
+        if key not in lists:
+            raise exceptions.NotFound()
+        return Response(lists[key])

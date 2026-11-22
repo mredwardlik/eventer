@@ -7,8 +7,11 @@ export const userService = {
     register(username: string, email: string, password: string) {
         return instance.post("user/register", { username, email, password });
     },
-    identify(token: string) {
-        return instance.get(`user/identify/${token}`);
+    me() {
+        return instance.get("user/me");
+    },
+    logout() {
+        return instance.post("user/logout");
     },
     getEditorValue() {
         return instance.get("user/editor");

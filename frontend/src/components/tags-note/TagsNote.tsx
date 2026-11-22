@@ -11,7 +11,7 @@ const TagsNote: React.FC<TagsNoteProps> = (props) => {
     if (tags.length === 0) return null;
     return (
         <div className={classes["container"]}>
-            {tags.map((tag) => <p>#{tag}</p>)}
+            {tags.map((tag) => <p key={tag}>#{tag}</p>)}
         </div>
     );
 };
